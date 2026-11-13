@@ -351,7 +351,7 @@ def plot_peak_fit(fit, show_smoothed=True):
     return ax1
 
 
-def plot_peak_fits(fits, show_smoothed=False):
+def plot_peak_fits(fits, show_smoothed=True):
     """
     Plot several Gaussian peak fits from peak_fitting.fit_dos_peaks (e.g. one per element) as stacked panels, one
     per projection.
@@ -367,10 +367,11 @@ def plot_peak_fits(fits, show_smoothed=False):
     )
     for ax, fit in zip(axes[:, 0], fits):
         f = np.asarray(fit["frequencies"]) / 1e12  # Hz -> THz
-        ax.plot(f, fit["densities"], color="black", linewidth=1.5, label="DOS")
+        dos_label = "Calculated DOS" if fit.get("temperature") is None else "Bose-Einstein weighted DOS"
+        ax.plot(f, fit["densities"], color="black", linewidth=1.5, label=dos_label)
         if show_smoothed:
             ax.plot(
-                f, fit["smoothed"], color="darkorange", linewidth=1, label="Smoothed"
+                f, fit["smoothed"], color="darkorange", linewidth=1, label="Smoothed DOS"
             )
         ax.plot(
             f,

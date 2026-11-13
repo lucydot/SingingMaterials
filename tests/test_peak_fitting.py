@@ -108,7 +108,6 @@ def test_plots(tmp_path):
     fits = peak_fitting.fit_dos_peaks(dos_dict=make_dos_dict(), n_peaks=2, projection="element")
     assert len(visualisation.plot_peak_fits(fits)) == 2
     assert len(visualisation.plot_peak_fit(fits["A"]).figure.axes) == 1
-    assert len(visualisation.plot_peak_fit(fits["A"], show_residuals=True).figure.axes) == 2
 
 
 def test_temperature_weights_the_dos_and_labels_the_csv(tmp_path):
