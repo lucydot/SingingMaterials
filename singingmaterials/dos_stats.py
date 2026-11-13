@@ -1,12 +1,16 @@
 import numpy as np
 import pandas as pd
 import math
+import re
 import scipy
 from scipy import constants
 from singingmaterials import mp_interface
 
 def dos_stats_analysis(mp_id=None,phonopy_filename=None,temp=None):
-    """for each entry in a dos_dict, calculate the integrated dos, the phonon band centre, the quantiles and the IQR and of the dos distribution in Hz (discounting any negative frequencies) and add these to the nested dicts. The dos is optionally weighted by Bose Einstein occupation at a specified temp. DOS can be gotten from the materials project (mp_id) or from a phonopy summary file from the phonondb database (phonopy_filename)."""
+    """for each entry in a dos_dict, calculate the integrated dos, the phonon band centre, the quantiles and the IQR and of the dos distribution in Hz (discounting any negative frequencies) and add these to the nested dicts. The dos is optionally weighted by Bose Einstein occupation at a specified temp. DOS can be gotten from the materials project (mp_id) or from a phonopy summary file from the phonondb database (phonopy_filename).
+
+    Stats are calculated per site (dos_dict['projection'], which also holds the 'total' dos) and per element
+    (dos_dict['element'], where the densities of all sites of the same element are summed). Both have the same structure."""
     
     if temp is not None:
         if not hasattr(temp, '__iter__'):
@@ -21,48 +25,79 @@ def dos_stats_analysis(mp_id=None,phonopy_filename=None,temp=None):
         dos_dict = phonopy_interface.get_dos_raw_phonopy(phonopy_filename)
     else:
         raise ValueError('You must specify a dos data source (mp_id or phonopy_filename)')
-    for site in dos_dict['projection']:
-        site_dict = dos_dict['projection'][site]
-        site_dict['stats'] = {}
-        site_dict['stats']['athermal'] = {}
-        densities = site_dict['densities']
-        f = site_dict['frequencies']
-        site_dict['stats']['athermal']['band_centre'] = phonon_band_centre(f,densities)
-        site_dict['stats']['athermal']['integrated_dos'] = integrated_dos(f,densities)
-        site_dict['stats']['athermal']['quantile_25'] = weighted_quantile(f, densities, 0.25)
-        site_dict['stats']['athermal']['quantile_75'] = weighted_quantile(f, densities, 0.75)
-        site_dict['stats']['athermal']['IQR'] = phonon_dos_IQR(f,densities)
-        site_dict['stats']['athermal']['shannon_entropy'] = phonon_shannon_entropy(f,densities)
-        site_dict['stats']['athermal']['densities'] = densities
-        
-        if temp:
-            site_dict['stats']['thermal'] = {}
-            for t in temp:
-                densities_scaled = scale_by_occupation(densities, f, t)
-                site_dict['stats']['thermal'][str(t)] = {}
-                site_dict['stats']['thermal'][str(t)]['band_centre'] = phonon_band_centre(f,densities_scaled)
-                site_dict['stats']['thermal'][str(t)]['integrated_dos'] = integrated_dos(f,densities_scaled)
-                site_dict['stats']['thermal'][str(t)]['quantile_25'] = weighted_quantile(f, densities_scaled, 0.25)
-                site_dict['stats']['thermal'][str(t)]['quantile_75'] = weighted_quantile(f, densities_scaled, 0.75)
-                site_dict['stats']['thermal'][str(t)]['IQR'] = phonon_dos_IQR(f,densities_scaled)
-                site_dict['stats']['thermal'][str(t)]['shannon_entropy'] = phonon_shannon_entropy(f,densities_scaled)
-                site_dict['stats']['thermal'][str(t)]['densities'] = densities_scaled
+
+    dos_dict['element'] = element_projections(dos_dict['projection'])
+
+    for group in ('projection', 'element'):
+        for entry in dos_dict[group].values():
+            add_stats(entry, temp)
 
     return dos_dict
 
-def dos_dict_to_dataframe(dos_dict):
-    """convert the nested dictionary to a pandas dataframe"""
+def element_from_site_label(site_label):
+    """return the element symbol from a site label, e.g. 'O_1' -> 'O', 'Mg' -> 'Mg', 'Fe2+_3' -> 'Fe'."""
+    match = re.match(r"[A-Z][a-z]*", site_label)
+    if match is None:
+        raise ValueError(f"cannot identify an element in site label '{site_label}'")
+    return match.group(0)
+
+def element_projections(projection):
+    """sum the site-projected densities over all sites of the same element. Returns a dict keyed by element
+    symbol, with the same 'densities' and 'frequencies' structure as the site projections. 'total' is excluded."""
+    elements = {}
+    for site, site_dict in projection.items():
+        if site == 'total':
+            continue
+        element = element_from_site_label(site)
+        if element in elements:
+            elements[element]['densities'] = elements[element]['densities'] + site_dict['densities']
+        else:
+            elements[element] = {'densities': np.array(site_dict['densities'], dtype=float),
+                                 'frequencies': site_dict['frequencies']}
+    return elements
+
+def calculate_stats(f, densities):
+    """return a dict of the distribution stats for a single dos."""
+    return {
+        'band_centre': phonon_band_centre(f, densities),
+        'integrated_dos': integrated_dos(f, densities),
+        'quantile_25': weighted_quantile(f, densities, 0.25),
+        'quantile_75': weighted_quantile(f, densities, 0.75),
+        'IQR': phonon_dos_IQR(f, densities),
+        'shannon_entropy': phonon_shannon_entropy(f, densities),
+        'densities': densities,
+    }
+
+def add_stats(entry, temp=None):
+    """add athermal (and, if temp is given, thermal) stats to a dict holding 'densities' and 'frequencies'."""
+    densities = entry['densities']
+    f = entry['frequencies']
+    entry['stats'] = {'athermal': calculate_stats(f, densities)}
+    if temp:
+        entry['stats']['thermal'] = {str(t): calculate_stats(f, scale_by_occupation(densities, f, t))
+                                     for t in temp}
+
+def dos_dict_to_dataframe(dos_dict, by="site"):
+    """convert the nested dictionary to a pandas dataframe. by="site" (default) gives one row per site
+    (including 'total'), by="element" gives one row per element."""
+    if by == "site":
+        group, label_column = "projection", "site"
+    elif by == "element":
+        group, label_column = "element", "element"
+    else:
+        raise ValueError(f'by must be "site" or "element", not "{by}"')
+
     rows = []
 
     mp_id = dos_dict["metadata"]["mp_id"]
 
-    for site, site_data in dos_dict["projection"].items():
-        stats = site_data["stats"]
+    for label, label_data in dos_dict[group].items():
+        stats = label_data["stats"]
 
         # athermal row
         row_base = {
             "mp_id": mp_id,
-            "site": site,
+            label_column: label,
             "temperature": None
         }
 
@@ -76,7 +111,7 @@ def dos_dict_to_dataframe(dos_dict):
             for T, values in stats["thermal"].items():
                 row = {
                     "mp_id": mp_id,
-                    "site": site,
+                    label_column: label,
                     "temperature": float(T)
                 }
                 row.update(values)

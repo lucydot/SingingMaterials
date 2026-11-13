@@ -1,3 +1,4 @@
+import copy
 import math
 
 import numpy as np
@@ -117,3 +118,62 @@ def test_dos_dict_to_dataframe(patch_mp):
     assert len(df) == n_sites * 3  # athermal + two temperatures
     assert set(df["temperature"].dropna()) == {300.0, 600.0}
     assert (df["mp_id"] == "mp-test").all()
+
+
+# --- by-element stats ---
+
+@pytest.mark.parametrize("label, element", [("O_1", "O"), ("Mg", "Mg"), ("Fe2+_3", "Fe"), ("A_1", "A")])
+def test_element_from_site_label(label, element):
+    assert dos_stats.element_from_site_label(label) == element
+
+
+def test_element_projections_sum_sites_of_same_element():
+    f = np.arange(3.0)
+    projection = {
+        "total": {"densities": np.array([6.0, 6.0, 6.0]), "frequencies": f},
+        "O_1": {"densities": np.array([1.0, 2.0, 3.0]), "frequencies": f},
+        "O_2": {"densities": np.array([3.0, 2.0, 1.0]), "frequencies": f},
+        "Mg": {"densities": np.array([2.0, 2.0, 2.0]), "frequencies": f},
+    }
+    elements = dos_stats.element_projections(projection)
+    assert set(elements) == {"O", "Mg"}
+    np.testing.assert_array_equal(elements["O"]["densities"], [4.0, 4.0, 4.0])
+    np.testing.assert_array_equal(elements["Mg"]["densities"], [2.0, 2.0, 2.0])
+    # the site densities are not modified
+    np.testing.assert_array_equal(projection["O_1"]["densities"], [1.0, 2.0, 3.0])
+
+
+def test_element_stats(patch_mp):
+    d = dos_stats.dos_stats_analysis(mp_id="mp-test", temp=[300])
+    assert "total" not in d["element"]
+    assert set(d["element"]) == {"A", "B"}
+    for site, p in SITE_PARAMS.items():
+        element = dos_stats.element_from_site_label(site)
+        stats = d["element"][element]["stats"]
+        assert stats["athermal"]["band_centre"] == pytest.approx(p["centre"], rel=1e-3)
+        site_thermal = d["projection"][site]["stats"]["thermal"]["300"]
+        assert stats["thermal"]["300"]["band_centre"] == pytest.approx(site_thermal["band_centre"])
+
+
+def test_element_band_centre_is_weighted_mean_of_sites(patch_mp, monkeypatch):
+    # make B_1 a second site of element A, so A has two sites
+    raw = copy.deepcopy(patch_mp)
+    raw["projection"]["A_2"] = raw["projection"].pop("B_1")
+    from singingmaterials import mp_interface
+    monkeypatch.setattr(mp_interface, "get_dos_raw_mp", lambda mp_id: copy.deepcopy(raw))
+
+    d = dos_stats.dos_stats_analysis(mp_id="mp-test")
+    sites = [d["projection"][s]["stats"]["athermal"] for s in ("A_1", "A_2")]
+    expected = (sum(s["band_centre"] * s["integrated_dos"] for s in sites)
+                / sum(s["integrated_dos"] for s in sites))
+    assert list(d["element"]) == ["A"]
+    assert d["element"]["A"]["stats"]["athermal"]["band_centre"] == pytest.approx(expected)
+
+
+def test_dos_dict_to_dataframe_by_element(patch_mp):
+    d = dos_stats.dos_stats_analysis(mp_id="mp-test", temp=[300, 600])
+    df = dos_stats.dos_dict_to_dataframe(d, by="element")
+    assert len(df) == len(d["element"]) * 3
+    assert set(df["element"]) == {"A", "B"}
+    with pytest.raises(ValueError):
+        dos_stats.dos_dict_to_dataframe(d, by="atom")

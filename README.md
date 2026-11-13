@@ -88,6 +88,30 @@ print(dos_dict_to_dataframe(dos_dict))
 visualisation.plot_dos_at_temperature(dos_dict)
 ```
 
+Stats are given per site in `dos_dict["projection"]` (which also holds the `"total"` DOS), and per element in `dos_dict["element"]`, where the densities of all sites of the same element are summed:
+
+```python
+for element, data in dos_dict["element"].items():
+    print(element, data["stats"]["athermal"]["band_centre"])  # in Hz
+
+print(dos_dict_to_dataframe(dos_dict, by="element"))
+```
+
+### Fitting the DOS with Gaussian peaks
+
+The DOS can be summarised as a set of Gaussian peaks, for the total DOS or for each element's projected DOS, and the peaks saved to a CSV file:
+
+```python
+from singingmaterials import peak_fitting, visualisation
+
+fits = peak_fitting.fit_dos_peaks("mp-3953", projection="element",
+                                  n_peaks={"Ca": 6, "C": 4, "O": 6}, smoothing={"Ca": 0.1})
+visualisation.plot_peak_fits(fits)
+peak_fitting.save_peak_fit(fits)  # -> peak_fit_mp-3953_element.csv
+```
+
+Pass `temperature` (K) to fit the DOS weighted by the Bose-Einstein occupation at that temperature. The [peak fitting tutorial](tutorials/peak_fitting.ipynb) explains the method and how to choose the settings.
+
 ## Package structure
 
 `mp_interface.py` : interface to the Materials Project database holding density of states data.
@@ -96,7 +120,9 @@ visualisation.plot_dos_at_temperature(dos_dict)
 
 `dos_stats.py` : this reads in density of states data via one of the interfaces and post-processes it ready for analysis or sonification.
 
-`visualisation.py` : functions for plotting the density of states data. because seeing things is still useful.
+`peak_fitting.py` : fits the density of states (total, or projected by element or site) with a set of Gaussian peaks, and saves the peaks to a CSV file.
+
+`visualisation.py` : functions for plotting the density of states data, the band structure and the peak fits. because seeing things is still useful.
 
 `utilities.py` : small utility functions.
 
